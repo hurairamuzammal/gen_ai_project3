@@ -20,6 +20,7 @@ DCGAN_CKPT = MODEL_DIR / "dcgan_generator_final.pt"
 WGANGP_CKPT = MODEL_DIR / "wgangp_checkpoint.pt"
 WGANGP_GEN_FALLBACK = MODEL_DIR / "wgangp_generator_final.pt"
 PIX2PIX_CKPT = MODEL_DIR / "pix2pix_export_q2.pt"
+Q2_SAMPLE_IMAGE = MODEL_DIR / "q2_sample_input.png"
 
 CYCLEGAN_GAB_CKPT = MODEL_DIR / "G_AB_final.pth"
 CYCLEGAN_GBA_CKPT = MODEL_DIR / "G_BA_final.pth"
@@ -242,6 +243,34 @@ class Q2UNetBlock(nn.Module):
         return self.dropout(x) if self.use_dropout else x
 
 
+class Q2EDBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, down=True, use_bn=True, act="leaky", use_dropout=False):
+        super().__init__()
+        layers = []
+        if down:
+            layers.append(
+                nn.Conv2d(in_channels, out_channels, 4, 2, 1, bias=False, padding_mode="reflect")
+            )
+        else:
+            layers.append(nn.ConvTranspose2d(in_channels, out_channels, 4, 2, 1, bias=False))
+
+        if use_bn:
+            layers.append(nn.BatchNorm2d(out_channels))
+
+        if act == "relu":
+            layers.append(nn.ReLU())
+        else:
+            layers.append(nn.LeakyReLU(0.2))
+
+        self.block = nn.Sequential(*layers)
+        self.use_dropout = use_dropout
+        self.dropout = nn.Dropout(0.5)
+
+    def forward(self, x):
+        x = self.block(x)
+        return self.dropout(x) if self.use_dropout else x
+
+
 class Q2Generator(nn.Module):
     def __init__(self, in_channels=3, features=64):
         super().__init__()
@@ -295,6 +324,68 @@ class Q2Generator(nn.Module):
         return self.final_up(torch.cat([u7, d1], dim=1))
 
 
+class Q2GeneratorAlt(nn.Module):
+    """Pix2Pix generator variant with e*/d*/final naming used by exported Q2 checkpoint."""
+
+    def __init__(self, in_channels=3, features=64):
+        super().__init__()
+        self.e0 = Q2EDBlock(in_channels, features, down=True, use_bn=False, act="leaky")
+        self.e1 = Q2EDBlock(features, features * 2, down=True, use_bn=True, act="leaky")
+        self.e2 = Q2EDBlock(features * 2, features * 4, down=True, use_bn=True, act="leaky")
+        self.e3 = Q2EDBlock(features * 4, features * 8, down=True, use_bn=True, act="leaky")
+        self.e4 = Q2EDBlock(features * 8, features * 8, down=True, use_bn=True, act="leaky")
+        self.e5 = Q2EDBlock(features * 8, features * 8, down=True, use_bn=True, act="leaky")
+        self.e6 = Q2EDBlock(features * 8, features * 8, down=True, use_bn=True, act="leaky")
+        self.e7 = Q2EDBlock(features * 8, features * 8, down=True, use_bn=False, act="relu")
+
+        self.d0 = Q2EDBlock(features * 8, features * 8, down=False, use_bn=True, act="relu", use_dropout=True)
+        self.d1 = Q2EDBlock(
+            features * 16,
+            features * 8,
+            down=False,
+            use_bn=True,
+            act="relu",
+            use_dropout=True,
+        )
+        self.d2 = Q2EDBlock(
+            features * 16,
+            features * 8,
+            down=False,
+            use_bn=True,
+            act="relu",
+            use_dropout=True,
+        )
+        self.d3 = Q2EDBlock(features * 16, features * 8, down=False, use_bn=True, act="relu")
+        self.d4 = Q2EDBlock(features * 16, features * 4, down=False, use_bn=True, act="relu")
+        self.d5 = Q2EDBlock(features * 8, features * 2, down=False, use_bn=True, act="relu")
+        self.d6 = Q2EDBlock(features * 4, features, down=False, use_bn=True, act="relu")
+
+        self.final = nn.Sequential(
+            nn.ConvTranspose2d(features * 2, in_channels, kernel_size=4, stride=2, padding=1),
+            nn.Tanh(),
+        )
+
+    def forward(self, x):
+        e0 = self.e0(x)
+        e1 = self.e1(e0)
+        e2 = self.e2(e1)
+        e3 = self.e3(e2)
+        e4 = self.e4(e3)
+        e5 = self.e5(e4)
+        e6 = self.e6(e5)
+        e7 = self.e7(e6)
+
+        d0 = self.d0(e7)
+        d1 = self.d1(torch.cat([d0, e6], dim=1))
+        d2 = self.d2(torch.cat([d1, e5], dim=1))
+        d3 = self.d3(torch.cat([d2, e4], dim=1))
+        d4 = self.d4(torch.cat([d3, e3], dim=1))
+        d5 = self.d5(torch.cat([d4, e2], dim=1))
+        d6 = self.d6(torch.cat([d5, e1], dim=1))
+
+        return self.final(torch.cat([d6, e0], dim=1))
+
+
 Q2_TRANSFORM = transforms.Compose(
     [
         transforms.Resize((Q2_IMAGE_SIZE, Q2_IMAGE_SIZE)),
@@ -310,12 +401,25 @@ def load_q2_pix2pix_model(device_str: str) -> nn.Module:
     if not PIX2PIX_CKPT.exists():
         raise FileNotFoundError(f"Missing checkpoint: {PIX2PIX_CKPT}")
 
-    model = Q2Generator().to(device)
     payload = torch.load(PIX2PIX_CKPT, map_location=device)
     state_dict = extract_state_dict(payload)
-    load_model_weights(model, state_dict)
-    model.eval()
-    return model
+
+    # Try both naming conventions used in this assignment's Pix2Pix exports.
+    load_errors = []
+    for model_ctor in (Q2Generator, Q2GeneratorAlt):
+        model = model_ctor().to(device)
+        try:
+            load_model_weights(model, state_dict)
+            model.eval()
+            return model
+        except RuntimeError as exc:
+            load_errors.append(f"{model_ctor.__name__}: {exc}")
+
+    joined_errors = "\n".join(load_errors)
+    raise RuntimeError(
+        "Unable to load Q2 Pix2Pix checkpoint with supported architectures.\n"
+        f"Details:\n{joined_errors}"
+    )
 
 
 # --------------------------
@@ -442,26 +546,47 @@ def load_q3_models(
 # --------------------------
 st.set_page_config(page_title="GenAI Assignment Inference", page_icon="AI", layout="wide")
 
+theme_base = str(st.get_option("theme.base") or "light").lower()
+is_dark_theme = theme_base == "dark"
+
+if is_dark_theme:
+    app_gradient = "radial-gradient(circle at top right, #101826 0%, #0d141f 45%, #0b1118 100%)"
+    hero_gradient = "linear-gradient(135deg, #f5f7fa 0%, #e2e8f0 60%, #cbd5e1 100%)"
+    hero_text = "#0f172a"
+    hero_border = "#334155"
+    card_bg = "rgba(15, 23, 42, 0.75)"
+    card_border = "#334155"
+else:
+    app_gradient = "radial-gradient(circle at top right, #edf7ff 0%, #f8f5ee 40%, #f7fbf4 100%)"
+    hero_gradient = "linear-gradient(135deg, #0f172a 0%, #1f2937 60%, #334155 100%)"
+    hero_text = "#f8fafc"
+    hero_border = "#64748b"
+    card_bg = "rgba(255, 255, 255, 0.75)"
+    card_border = "#cbd5e1"
+
 st.markdown(
-    """
+    f"""
     <style>
-    .stApp {
-        background: radial-gradient(circle at top right, #edf7ff 0%, #f8f5ee 40%, #f7fbf4 100%);
-    }
-    .hero {
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
+
+    .stApp {{
+        background: {app_gradient};
+        font-family: 'Manrope', sans-serif;
+    }}
+    .hero {{
         padding: 1rem 1.25rem;
         border-radius: 0.8rem;
-        background: linear-gradient(135deg, #0f172a 0%, #1f2937 60%, #334155 100%);
-        color: white;
-        border: 1px solid #64748b;
+        background: {hero_gradient};
+        color: {hero_text};
+        border: 1px solid {hero_border};
         margin-bottom: 1rem;
-    }
-    .subcard {
+    }}
+    .subcard {{
         padding: 0.8rem 1rem;
         border-radius: 0.6rem;
-        border: 1px solid #cbd5e1;
-        background: rgba(255, 255, 255, 0.75);
-    }
+        border: 1px solid {card_border};
+        background: {card_bg};
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -493,19 +618,6 @@ with st.sidebar:
             "Q3: CycleGAN Sketch <-> Photo",
         ),
     )
-
-    st.divider()
-    st.subheader("Checkpoint Status")
-    st.write(f"Q1 DCGAN: {'✅' if DCGAN_CKPT.exists() else '❌'}")
-    st.write(
-        f"Q1 WGAN-GP: {'✅' if (WGANGP_CKPT.exists() or WGANGP_GEN_FALLBACK.exists()) else '❌'}"
-    )
-    st.write(f"Q2 Pix2Pix: {'✅' if PIX2PIX_CKPT.exists() else '❌'}")
-    q3_file_ok = (
-        (CYCLEGAN_GAB_CKPT.exists() and CYCLEGAN_GBA_CKPT.exists())
-        or CYCLEGAN_FULL_CKPT.exists()
-    )
-    st.write(f"Q3 CycleGAN: {'✅' if q3_file_ok else '⚠️ missing'}")
 
 
 if task == "Q1: GAN Pokemon Generation":
@@ -550,18 +662,50 @@ elif task == "Q2: Pix2Pix Sketch -> Color":
     st.subheader("Q2 - Pix2Pix Anime Sketch to Color")
 
     with st.container(border=True):
-        sketch_file = st.file_uploader("Upload sketch image", type=["png", "jpg", "jpeg", "webp"])
-        ref_file = st.file_uploader(
-            "Optional: upload reference color image for metrics (SSIM/PSNR)",
-            type=["png", "jpg", "jpeg", "webp"],
+        input_mode = st.radio(
+            "Input Source",
+            ["Upload Sketch", "Use Built-in Sample"],
+            horizontal=True,
         )
-        run_q2 = st.button("Colorize", type="primary", disabled=sketch_file is None)
 
-    if sketch_file is not None:
-        input_img = Image.open(sketch_file).convert("RGB")
-        st.image(input_img, caption="Input sketch", width=300)
+        left_up, right_up = st.columns(2)
+        with left_up:
+            sketch_file = st.file_uploader(
+                "Upload sketch image",
+                type=["png", "jpg", "jpeg", "webp"],
+                disabled=input_mode != "Upload Sketch",
+            )
+        with right_up:
+            ref_file = st.file_uploader(
+                "Upload reference color image (optional)",
+                type=["png", "jpg", "jpeg", "webp"],
+            )
 
-    if run_q2 and sketch_file is not None:
+        sample_sketch = Image.new("RGB", (Q2_IMAGE_SIZE, Q2_IMAGE_SIZE), "white")
+        # Create a deterministic sketch-like fallback sample when no file sample is available.
+        for y in range(0, Q2_IMAGE_SIZE, 8):
+            for x in range(0, Q2_IMAGE_SIZE, 8):
+                if (x // 8 + y // 8) % 2 == 0:
+                    sample_sketch.putpixel((x, y), (220, 220, 220))
+
+        input_img = None
+        sample_caption = "Built-in sample sketch"
+        if input_mode == "Use Built-in Sample":
+            if Q2_SAMPLE_IMAGE.exists():
+                input_img = Image.open(Q2_SAMPLE_IMAGE).convert("RGB")
+                sample_caption = "Provided sample sketch"
+            else:
+                input_img = sample_sketch
+        elif sketch_file is not None:
+            input_img = Image.open(sketch_file).convert("RGB")
+
+        run_q2 = st.button("Colorize", type="primary", disabled=input_img is None)
+
+    if input_img is not None:
+        display_caption = sample_caption if input_mode == "Use Built-in Sample" else "Input sketch"
+        st.image(input_img, caption=display_caption, width=300)
+
+    if run_q2 and input_img is not None:
         try:
             model = load_q2_pix2pix_model(str(device))
             in_tensor = Q2_TRANSFORM(input_img).unsqueeze(0).to(device)

@@ -23,7 +23,11 @@ Available in `model/`:
 
 - `dcgan_generator_final.pt` (Q1 DCGAN)
 - `wgangp_checkpoint.pt` (Q1 WGAN-GP, generator extracted from key `G`)
-- `pix2pix_export_q2.pt` (Q2 Pix2Pix generator)
+- `pix2pix_export_q2.pt` (Q2 Pix2Pix generator, both naming variants are supported)
+
+Optional for Q2 sample mode:
+
+- `q2_sample_input.png` (used when selecting "Use Built-in Sample" in the Q2 UI)
 
 Missing for Q3 by default:
 
