@@ -552,47 +552,59 @@ def load_q3_models(
 # --------------------------
 st.set_page_config(page_title="GenAI Assignment Inference", page_icon="AI", layout="wide")
 
-theme_base = str(st.get_option("theme.base") or "light").lower()
-is_dark_theme = theme_base == "dark"
-
-if is_dark_theme:
-    app_gradient = "radial-gradient(circle at top right, #101826 0%, #0d141f 45%, #0b1118 100%)"
-    hero_gradient = "linear-gradient(135deg, #f5f7fa 0%, #e2e8f0 60%, #cbd5e1 100%)"
-    hero_text = "#0f172a"
-    hero_border = "#334155"
-    card_bg = "rgba(15, 23, 42, 0.75)"
-    card_border = "#334155"
-else:
-    app_gradient = "radial-gradient(circle at top right, #edf7ff 0%, #f8f5ee 40%, #f7fbf4 100%)"
-    hero_gradient = "linear-gradient(135deg, #0f172a 0%, #1f2937 60%, #334155 100%)"
-    hero_text = "#f8fafc"
-    hero_border = "#64748b"
-    card_bg = "rgba(255, 255, 255, 0.75)"
-    card_border = "#cbd5e1"
-
 st.markdown(
-    f"""
+    """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
 
-    .stApp {{
-        background: {app_gradient};
+    .stApp {
+        /* Use Streamlit theme variables so light/dark mode always stays in sync. */
+        background:
+            radial-gradient(circle at top right, rgba(56, 189, 248, 0.16) 0%, transparent 44%),
+            radial-gradient(circle at bottom left, rgba(34, 197, 94, 0.10) 0%, transparent 38%),
+            var(--background-color);
         font-family: 'Manrope', sans-serif;
-    }}
-    .hero {{
+        color: var(--text-color);
+    }
+    .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+        color: var(--text-color);
+    }
+    .hero {
         padding: 1rem 1.25rem;
         border-radius: 0.8rem;
-        background: {hero_gradient};
-        color: {hero_text};
-        border: 1px solid {hero_border};
+        background: linear-gradient(135deg, #0f172a 0%, #1f2937 60%, #334155 100%);
+        color: #f8fafc;
+        border: 1px solid #64748b;
         margin-bottom: 1rem;
-    }}
-    .subcard {{
+    }
+    .subcard {
         padding: 0.8rem 1rem;
         border-radius: 0.6rem;
-        border: 1px solid {card_border};
-        background: {card_bg};
-    }}
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        background: rgba(255, 255, 255, 0.74);
+    }
+    @media (prefers-color-scheme: dark) {
+        .stApp {
+            background:
+                radial-gradient(circle at top right, rgba(30, 64, 175, 0.26) 0%, transparent 46%),
+                radial-gradient(circle at bottom left, rgba(20, 83, 45, 0.22) 0%, transparent 40%),
+                var(--background-color) !important;
+            color: #e5e7eb;
+        }
+        .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+            color: #e5e7eb !important;
+        }
+        .subcard {
+            border-color: #334155;
+            background: rgba(15, 23, 42, 0.72);
+        }
+        [data-testid="stFileUploader"] {
+            background: rgba(15, 23, 42, 0.62);
+            border: 1px solid #334155;
+            border-radius: 0.6rem;
+            padding: 0.35rem;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
