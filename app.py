@@ -329,36 +329,42 @@ class Q2GeneratorAlt(nn.Module):
 
     def __init__(self, in_channels=3, features=64):
         super().__init__()
-        self.e0 = Q2EDBlock(in_channels, features, down=True, use_bn=False, act="leaky")
-        self.e1 = Q2EDBlock(features, features * 2, down=True, use_bn=True, act="leaky")
-        self.e2 = Q2EDBlock(features * 2, features * 4, down=True, use_bn=True, act="leaky")
-        self.e3 = Q2EDBlock(features * 4, features * 8, down=True, use_bn=True, act="leaky")
-        self.e4 = Q2EDBlock(features * 8, features * 8, down=True, use_bn=True, act="leaky")
-        self.e5 = Q2EDBlock(features * 8, features * 8, down=True, use_bn=True, act="leaky")
-        self.e6 = Q2EDBlock(features * 8, features * 8, down=True, use_bn=True, act="leaky")
-        self.e7 = Q2EDBlock(features * 8, features * 8, down=True, use_bn=False, act="relu")
+        # e0 is a plain sequential block in this exported model format.
+        self.e0 = nn.Sequential(
+            nn.Conv2d(in_channels, features, 4, 2, 1, padding_mode="reflect"),
+            nn.LeakyReLU(0.2),
+        )
+        self.e1 = Q2UNetBlock(features, features * 2, down=True, act="leaky", use_dropout=False)
+        self.e2 = Q2UNetBlock(features * 2, features * 4, down=True, act="leaky", use_dropout=False)
+        self.e3 = Q2UNetBlock(features * 4, features * 8, down=True, act="leaky", use_dropout=False)
+        self.e4 = Q2UNetBlock(features * 8, features * 8, down=True, act="leaky", use_dropout=False)
+        self.e5 = Q2UNetBlock(features * 8, features * 8, down=True, act="leaky", use_dropout=False)
+        self.e6 = Q2UNetBlock(features * 8, features * 8, down=True, act="leaky", use_dropout=False)
 
-        self.d0 = Q2EDBlock(features * 8, features * 8, down=False, use_bn=True, act="relu", use_dropout=True)
-        self.d1 = Q2EDBlock(
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(features * 8, features * 8, 4, 2, 1, padding_mode="reflect"),
+            nn.ReLU(),
+        )
+
+        self.d0 = Q2UNetBlock(features * 8, features * 8, down=False, act="relu", use_dropout=True)
+        self.d1 = Q2UNetBlock(
             features * 16,
             features * 8,
             down=False,
-            use_bn=True,
             act="relu",
             use_dropout=True,
         )
-        self.d2 = Q2EDBlock(
+        self.d2 = Q2UNetBlock(
             features * 16,
             features * 8,
             down=False,
-            use_bn=True,
             act="relu",
             use_dropout=True,
         )
-        self.d3 = Q2EDBlock(features * 16, features * 8, down=False, use_bn=True, act="relu")
-        self.d4 = Q2EDBlock(features * 16, features * 4, down=False, use_bn=True, act="relu")
-        self.d5 = Q2EDBlock(features * 8, features * 2, down=False, use_bn=True, act="relu")
-        self.d6 = Q2EDBlock(features * 4, features, down=False, use_bn=True, act="relu")
+        self.d3 = Q2UNetBlock(features * 16, features * 8, down=False, act="relu", use_dropout=False)
+        self.d4 = Q2UNetBlock(features * 16, features * 4, down=False, act="relu", use_dropout=False)
+        self.d5 = Q2UNetBlock(features * 8, features * 2, down=False, act="relu", use_dropout=False)
+        self.d6 = Q2UNetBlock(features * 4, features, down=False, act="relu", use_dropout=False)
 
         self.final = nn.Sequential(
             nn.ConvTranspose2d(features * 2, in_channels, kernel_size=4, stride=2, padding=1),
@@ -373,9 +379,9 @@ class Q2GeneratorAlt(nn.Module):
         e4 = self.e4(e3)
         e5 = self.e5(e4)
         e6 = self.e6(e5)
-        e7 = self.e7(e6)
+        bn = self.bottleneck(e6)
 
-        d0 = self.d0(e7)
+        d0 = self.d0(bn)
         d1 = self.d1(torch.cat([d0, e6], dim=1))
         d2 = self.d2(torch.cat([d1, e5], dim=1))
         d3 = self.d3(torch.cat([d2, e4], dim=1))
