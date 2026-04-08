@@ -22,6 +22,7 @@ WGANGP_CKPT = MODEL_DIR / "wgangp_checkpoint.pt"
 WGANGP_GEN_FALLBACK = MODEL_DIR / "wgangp_generator_final.pt"
 PIX2PIX_CKPT = MODEL_DIR / "pix2pix_export_q2.pt"
 Q2_SAMPLE_IMAGE = MODEL_DIR / "q2_sample_input.png"
+Q3_SAMPLE_IMAGE = MODEL_DIR / "q3_sample_input.png"
 
 CYCLEGAN_GAB_CKPT = MODEL_DIR / "G_AB_final.pth"
 CYCLEGAN_GBA_CKPT = MODEL_DIR / "G_BA_final.pth"
@@ -532,51 +533,30 @@ Q3_TRANSFORM = transforms.Compose(
 
 
 @st.cache_resource
-def load_q3_models(
-    device_str: str,
-    g_ab_blob: Optional[bytes],
-    g_ba_blob: Optional[bytes],
-    full_blob: Optional[bytes],
-) -> Tuple[nn.Module, nn.Module]:
+def load_q3_models(device_str: str) -> Tuple[nn.Module, nn.Module]:
     device = torch.device(device_str)
-
-    # Source priority:
-    # 1) Uploaded G_AB + G_BA
-    # 2) Uploaded full CycleGAN checkpoint
-    # 3) Files in model/ directory
 
     sd_ab = None
     sd_ba = None
 
-    if g_ab_blob is not None and g_ba_blob is not None:
-        payload_ab = load_torch_payload_from_bytes(g_ab_blob, device)
-        payload_ba = load_torch_payload_from_bytes(g_ba_blob, device)
+    local_gab = resolve_local_checkpoint_path(CYCLEGAN_GAB_CKPT)
+    local_gba = resolve_local_checkpoint_path(CYCLEGAN_GBA_CKPT)
+    local_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
+
+    if local_gab is not None and local_gba is not None:
+        payload_ab = load_torch_payload_from_path(local_gab, device)
+        payload_ba = load_torch_payload_from_path(local_gba, device)
         sd_ab = extract_state_dict(payload_ab)
         sd_ba = extract_state_dict(payload_ba)
 
-    elif full_blob is not None:
-        payload = load_torch_payload_from_bytes(full_blob, device)
+    elif local_full is not None:
+        payload = load_torch_payload_from_path(local_full, device)
         sd_ab, sd_ba = split_cyclegan_full_state_dict(payload)
 
     else:
-        local_gab = resolve_local_checkpoint_path(CYCLEGAN_GAB_CKPT)
-        local_gba = resolve_local_checkpoint_path(CYCLEGAN_GBA_CKPT)
-        local_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
-
-        if local_gab is not None and local_gba is not None:
-            payload_ab = load_torch_payload_from_path(local_gab, device)
-            payload_ba = load_torch_payload_from_path(local_gba, device)
-            sd_ab = extract_state_dict(payload_ab)
-            sd_ba = extract_state_dict(payload_ba)
-
-        elif local_full is not None:
-            payload = load_torch_payload_from_path(local_full, device)
-            sd_ab, sd_ba = split_cyclegan_full_state_dict(payload)
-
-        else:
-            raise FileNotFoundError(
-                "CycleGAN checkpoints are missing. Provide G_AB and G_BA checkpoints or a full CycleGAN checkpoint."
-            )
+        raise FileNotFoundError(
+            "CycleGAN checkpoints are missing in model/. Add G_AB + G_BA or a full CycleGAN checkpoint."
+        )
 
     model_ab = Q3Generator().to(device)
     model_ba = Q3Generator().to(device)
@@ -724,22 +704,21 @@ elif task == "Q2: Pix2Pix Sketch -> Color":
     with st.container(border=True):
         input_mode = st.radio(
             "Input Source",
-            ["Upload Sketch", "Use Built-in Sample"],
+            ["Use Built-in Sample", "Upload Sketch"],
             horizontal=True,
         )
 
-        left_up, right_up = st.columns(2)
-        with left_up:
+        sketch_file = None
+        if input_mode == "Upload Sketch":
             sketch_file = st.file_uploader(
                 "Upload sketch image",
                 type=["png", "jpg", "jpeg", "webp"],
-                disabled=input_mode != "Upload Sketch",
             )
-        with right_up:
-            ref_file = st.file_uploader(
-                "Upload reference color image (optional)",
-                type=["png", "jpg", "jpeg", "webp"],
-            )
+
+        ref_file = st.file_uploader(
+            "Upload reference color image (optional)",
+            type=["png", "jpg", "jpeg", "webp"],
+        )
 
         sample_sketch = Image.new("RGB", (Q2_IMAGE_SIZE, Q2_IMAGE_SIZE), "white")
         # Create a deterministic sketch-like fallback sample when no file sample is available.
@@ -800,57 +779,72 @@ elif task == "Q2: Pix2Pix Sketch -> Color":
 else:
     st.subheader("Q3 - CycleGAN Sketch <-> Photo Translation")
 
-    st.info(
-        "Task 3 needs CycleGAN generator checkpoints. If not found in model/ directory, upload them below."
-    )
-
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        up_ab = st.file_uploader("Upload G_AB checkpoint (.pth/.pt/.zip)", type=["pth", "pt", "zip"])
-    with col_b:
-        up_ba = st.file_uploader("Upload G_BA checkpoint (.pth/.pt/.zip)", type=["pth", "pt", "zip"])
-    with col_c:
-        up_full = st.file_uploader("Or upload full CycleGAN checkpoint", type=["pth", "pt", "zip"])
-
-    g_ab_blob = read_uploaded_checkpoint(up_ab)
-    g_ba_blob = read_uploaded_checkpoint(up_ba)
-    full_blob = read_uploaded_checkpoint(up_full)
-
     local_q3_ab = resolve_local_checkpoint_path(CYCLEGAN_GAB_CKPT)
     local_q3_ba = resolve_local_checkpoint_path(CYCLEGAN_GBA_CKPT)
     local_q3_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
 
     q3_available = (
-        (g_ab_blob is not None and g_ba_blob is not None)
-        or (full_blob is not None)
-        or (local_q3_ab is not None and local_q3_ba is not None)
+        (local_q3_ab is not None and local_q3_ba is not None)
         or (local_q3_full is not None)
     )
 
+    if q3_available:
+        st.success("Using CycleGAN checkpoints from model/ directory.")
+
     if not q3_available:
         st.warning(
-            "No usable Q3 checkpoints found. Upload G_AB + G_BA checkpoints or a full CycleGAN checkpoint to run inference."
+            "No usable Q3 checkpoints found in model/. Add G_AB + G_BA checkpoints or a full CycleGAN checkpoint to run inference."
         )
 
     with st.container(border=True):
-        q3_image = st.file_uploader("Upload input image", type=["png", "jpg", "jpeg", "webp"])
+        q3_input_mode = st.radio(
+            "Input Source",
+            ["Use Built-in Sample", "Upload Input Image"],
+            horizontal=True,
+        )
+
+        q3_image_file = None
+        if q3_input_mode == "Upload Input Image":
+            q3_image_file = st.file_uploader("Upload input image", type=["png", "jpg", "jpeg", "webp"])
+
+        q3_missing_uploaded_input = q3_input_mode == "Upload Input Image" and q3_image_file is None
+
         direction = st.radio(
             "Direction",
             ["Sketch -> Photo", "Photo -> Sketch"],
             horizontal=True,
         )
         show_cycle = st.checkbox("Show cycle consistency output", value=False)
-        run_q3 = st.button("Translate", type="primary", disabled=(q3_image is None or not q3_available))
+        run_q3 = st.button(
+            "Translate",
+            type="primary",
+            disabled=(not q3_available or q3_missing_uploaded_input),
+        )
 
-    if q3_image is not None:
-        input_img = Image.open(q3_image).convert("RGB")
-        st.image(input_img, caption="Input image", width=300)
+    q3_input_img = None
+    q3_sample_caption = "Built-in sample image"
+    if q3_input_mode == "Use Built-in Sample":
+        if Q3_SAMPLE_IMAGE.exists():
+            q3_input_img = Image.open(Q3_SAMPLE_IMAGE).convert("RGB")
+            q3_sample_caption = "Provided Q3 sample image"
+        else:
+            q3_input_img = Image.new("RGB", (Q3_IMAGE_SIZE, Q3_IMAGE_SIZE), "white")
+            for y in range(0, Q3_IMAGE_SIZE, 8):
+                for x in range(0, Q3_IMAGE_SIZE, 8):
+                    shade = 220 if (x // 8 + y // 8) % 2 == 0 else 245
+                    q3_input_img.putpixel((x, y), (shade, shade, shade))
+    elif q3_image_file is not None:
+        q3_input_img = Image.open(q3_image_file).convert("RGB")
 
-    if run_q3 and q3_image is not None and q3_available:
+    if q3_input_img is not None:
+        display_caption = q3_sample_caption if q3_input_mode == "Use Built-in Sample" else "Input image"
+        st.image(q3_input_img, caption=display_caption, width=300)
+
+    if run_q3 and q3_input_img is not None and q3_available:
         try:
-            model_ab, model_ba = load_q3_models(str(device), g_ab_blob, g_ba_blob, full_blob)
+            model_ab, model_ba = load_q3_models(str(device))
 
-            in_tensor = Q3_TRANSFORM(input_img).unsqueeze(0).to(device)
+            in_tensor = Q3_TRANSFORM(q3_input_img).unsqueeze(0).to(device)
             with torch.no_grad():
                 if direction == "Sketch -> Photo":
                     translated = model_ab(in_tensor)
@@ -864,12 +858,12 @@ else:
             if show_cycle and cycled is not None:
                 cyc_img = tensor_to_pil_from_tanh(cycled)
                 c1, c2, c3 = st.columns(3)
-                c1.image(input_img.resize((Q3_IMAGE_SIZE, Q3_IMAGE_SIZE)), caption="Input", use_container_width=True)
+                c1.image(q3_input_img.resize((Q3_IMAGE_SIZE, Q3_IMAGE_SIZE)), caption="Input", use_container_width=True)
                 c2.image(out_img, caption="Translated", use_container_width=True)
                 c3.image(cyc_img, caption="Cycle Reconstructed", use_container_width=True)
             else:
                 c1, c2 = st.columns(2)
-                c1.image(input_img.resize((Q3_IMAGE_SIZE, Q3_IMAGE_SIZE)), caption="Input", use_container_width=True)
+                c1.image(q3_input_img.resize((Q3_IMAGE_SIZE, Q3_IMAGE_SIZE)), caption="Input", use_container_width=True)
                 c2.image(out_img, caption="Translated", use_container_width=True)
 
         except Exception as exc:
