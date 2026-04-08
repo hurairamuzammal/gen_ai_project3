@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 from typing import Optional, Tuple, cast
+import zipfile
 
 import numpy as np
 import streamlit as st
@@ -119,6 +120,42 @@ def read_uploaded_checkpoint(uploaded_file) -> Optional[bytes]:
 
 def load_torch_payload_from_bytes(blob: bytes, device: torch.device):
     return torch.load(io.BytesIO(blob), map_location=device)
+
+
+def resolve_local_checkpoint_path(base_path: Path) -> Optional[Path]:
+    """Resolve local checkpoint path across file, .zip file, or extracted directory."""
+    if base_path.is_file():
+        return base_path
+
+    zip_variant = Path(f"{base_path}.zip")
+    if zip_variant.is_file():
+        return zip_variant
+
+    if base_path.is_dir():
+        return base_path
+
+    return None
+
+
+def load_torch_payload_from_path(path: Path, device: torch.device):
+    """
+    Load checkpoint payload from file or extracted torch-zip folder.
+    Some training exports are committed as extracted directories.
+    """
+    if path.is_file():
+        return torch.load(path, map_location=device)
+
+    if path.is_dir():
+        with io.BytesIO() as buffer:
+            with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_STORED) as zf:
+                for file_path in path.rglob("*"):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(path).as_posix()
+                        zf.write(file_path, arcname=arcname)
+            buffer.seek(0)
+            return torch.load(buffer, map_location=device)
+
+    raise FileNotFoundError(f"Checkpoint not found: {path}")
 
 
 def split_cyclegan_full_state_dict(payload: object) -> Tuple[dict, dict]:
@@ -521,20 +558,25 @@ def load_q3_models(
         payload = load_torch_payload_from_bytes(full_blob, device)
         sd_ab, sd_ba = split_cyclegan_full_state_dict(payload)
 
-    elif CYCLEGAN_GAB_CKPT.exists() and CYCLEGAN_GBA_CKPT.exists():
-        payload_ab = torch.load(CYCLEGAN_GAB_CKPT, map_location=device)
-        payload_ba = torch.load(CYCLEGAN_GBA_CKPT, map_location=device)
-        sd_ab = extract_state_dict(payload_ab)
-        sd_ba = extract_state_dict(payload_ba)
-
-    elif CYCLEGAN_FULL_CKPT.exists():
-        payload = torch.load(CYCLEGAN_FULL_CKPT, map_location=device)
-        sd_ab, sd_ba = split_cyclegan_full_state_dict(payload)
-
     else:
-        raise FileNotFoundError(
-            "CycleGAN checkpoints are missing. Provide G_AB and G_BA checkpoints or a full CycleGAN checkpoint."
-        )
+        local_gab = resolve_local_checkpoint_path(CYCLEGAN_GAB_CKPT)
+        local_gba = resolve_local_checkpoint_path(CYCLEGAN_GBA_CKPT)
+        local_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
+
+        if local_gab is not None and local_gba is not None:
+            payload_ab = load_torch_payload_from_path(local_gab, device)
+            payload_ba = load_torch_payload_from_path(local_gba, device)
+            sd_ab = extract_state_dict(payload_ab)
+            sd_ba = extract_state_dict(payload_ba)
+
+        elif local_full is not None:
+            payload = load_torch_payload_from_path(local_full, device)
+            sd_ab, sd_ba = split_cyclegan_full_state_dict(payload)
+
+        else:
+            raise FileNotFoundError(
+                "CycleGAN checkpoints are missing. Provide G_AB and G_BA checkpoints or a full CycleGAN checkpoint."
+            )
 
     model_ab = Q3Generator().to(device)
     model_ba = Q3Generator().to(device)
@@ -764,21 +806,25 @@ else:
 
     col_a, col_b, col_c = st.columns(3)
     with col_a:
-        up_ab = st.file_uploader("Upload G_AB checkpoint (.pth/.pt)", type=["pth", "pt"])
+        up_ab = st.file_uploader("Upload G_AB checkpoint (.pth/.pt/.zip)", type=["pth", "pt", "zip"])
     with col_b:
-        up_ba = st.file_uploader("Upload G_BA checkpoint (.pth/.pt)", type=["pth", "pt"])
+        up_ba = st.file_uploader("Upload G_BA checkpoint (.pth/.pt/.zip)", type=["pth", "pt", "zip"])
     with col_c:
-        up_full = st.file_uploader("Or upload full CycleGAN checkpoint", type=["pth", "pt"])
+        up_full = st.file_uploader("Or upload full CycleGAN checkpoint", type=["pth", "pt", "zip"])
 
     g_ab_blob = read_uploaded_checkpoint(up_ab)
     g_ba_blob = read_uploaded_checkpoint(up_ba)
     full_blob = read_uploaded_checkpoint(up_full)
 
+    local_q3_ab = resolve_local_checkpoint_path(CYCLEGAN_GAB_CKPT)
+    local_q3_ba = resolve_local_checkpoint_path(CYCLEGAN_GBA_CKPT)
+    local_q3_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
+
     q3_available = (
         (g_ab_blob is not None and g_ba_blob is not None)
         or (full_blob is not None)
-        or (CYCLEGAN_GAB_CKPT.exists() and CYCLEGAN_GBA_CKPT.exists())
-        or CYCLEGAN_FULL_CKPT.exists()
+        or (local_q3_ab is not None and local_q3_ba is not None)
+        or (local_q3_full is not None)
     )
 
     if not q3_available:
