@@ -27,6 +27,8 @@ Q3_SAMPLE_IMAGE = MODEL_DIR / "q3_sample_input.png"
 CYCLEGAN_GAB_CKPT = MODEL_DIR / "G_AB_final.pth"
 CYCLEGAN_GBA_CKPT = MODEL_DIR / "G_BA_final.pth"
 CYCLEGAN_FULL_CKPT = MODEL_DIR / "cyclegan_final.pth"
+CYCLEGAN_SKETCH_TO_PHOTO_CKPT = MODEL_DIR / "generator_sketch_to_photo.pth"
+CYCLEGAN_PHOTO_TO_SKETCH_CKPT = MODEL_DIR / "generator_photo_to_sketch.pth"
 
 NOISE_SIZE = 100
 CHANNELS = 3
@@ -539,11 +541,21 @@ def load_q3_models(device_str: str) -> Tuple[nn.Module, nn.Module]:
     sd_ab = None
     sd_ba = None
 
+    local_s2p = resolve_local_checkpoint_path(CYCLEGAN_SKETCH_TO_PHOTO_CKPT)
+    local_p2s = resolve_local_checkpoint_path(CYCLEGAN_PHOTO_TO_SKETCH_CKPT)
     local_gab = resolve_local_checkpoint_path(CYCLEGAN_GAB_CKPT)
     local_gba = resolve_local_checkpoint_path(CYCLEGAN_GBA_CKPT)
     local_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
 
-    if local_gab is not None and local_gba is not None:
+    # Preferred naming for this project's Task 3 models.
+    if local_s2p is not None and local_p2s is not None:
+        payload_s2p = load_torch_payload_from_path(local_s2p, device)
+        payload_p2s = load_torch_payload_from_path(local_p2s, device)
+        sd_ab = extract_state_dict(payload_s2p)
+        sd_ba = extract_state_dict(payload_p2s)
+
+    # Backward-compatible fallback naming.
+    elif local_gab is not None and local_gba is not None:
         payload_ab = load_torch_payload_from_path(local_gab, device)
         payload_ba = load_torch_payload_from_path(local_gba, device)
         sd_ab = extract_state_dict(payload_ab)
@@ -555,7 +567,8 @@ def load_q3_models(device_str: str) -> Tuple[nn.Module, nn.Module]:
 
     else:
         raise FileNotFoundError(
-            "CycleGAN checkpoints are missing in model/. Add G_AB + G_BA or a full CycleGAN checkpoint."
+            "CycleGAN checkpoints are missing in model/. Add generator_sketch_to_photo.pth + "
+            "generator_photo_to_sketch.pth, or legacy G_AB + G_BA, or a full CycleGAN checkpoint."
         )
 
     model_ab = Q3Generator().to(device)
@@ -579,6 +592,13 @@ st.markdown(
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
 
+    :root {
+        --panel-border: rgba(148, 163, 184, 0.45);
+        --panel-bg-light: rgba(255, 255, 255, 0.74);
+        --panel-bg-dark: rgba(15, 23, 42, 0.72);
+        --hero-border: #64748b;
+    }
+
     .stApp {
         /* Use Streamlit theme variables so light/dark mode always stays in sync. */
         background:
@@ -596,14 +616,29 @@ st.markdown(
         border-radius: 0.8rem;
         background: linear-gradient(135deg, #0f172a 0%, #1f2937 60%, #334155 100%);
         color: #f8fafc;
-        border: 1px solid #64748b;
+        border: 1px solid var(--hero-border);
         margin-bottom: 1rem;
     }
     .subcard {
         padding: 0.8rem 1rem;
         border-radius: 0.6rem;
-        border: 1px solid rgba(148, 163, 184, 0.45);
-        background: rgba(255, 255, 255, 0.74);
+        border: 1px solid var(--panel-border);
+        background: var(--panel-bg-light);
+    }
+    .task-banner {
+        border: 1px solid var(--panel-border);
+        background: linear-gradient(95deg, rgba(15, 23, 42, 0.06) 0%, rgba(2, 132, 199, 0.12) 100%);
+        padding: 0.7rem 1rem;
+        border-radius: 0.6rem;
+        margin-bottom: 0.8rem;
+    }
+    .task-banner h4 {
+        margin: 0;
+        font-size: 1rem;
+    }
+    .task-banner p {
+        margin: 0.25rem 0 0;
+        font-size: 0.9rem;
     }
     @media (prefers-color-scheme: dark) {
         .stApp {
@@ -618,7 +653,11 @@ st.markdown(
         }
         .subcard {
             border-color: #334155;
-            background: rgba(15, 23, 42, 0.72);
+            background: var(--panel-bg-dark);
+        }
+        .task-banner {
+            border-color: #334155;
+            background: linear-gradient(95deg, rgba(15, 23, 42, 0.75) 0%, rgba(8, 47, 73, 0.85) 100%);
         }
         [data-testid="stFileUploader"] {
             background: rgba(15, 23, 42, 0.62);
@@ -779,24 +818,50 @@ elif task == "Q2: Pix2Pix Sketch -> Color":
 else:
     st.subheader("Q3 - CycleGAN Sketch <-> Photo Translation")
 
+    st.markdown(
+        """
+        <div class="task-banner">
+          <h4>Task 3 Translation</h4>
+          <p>Select direction, choose a sample or upload input, then run translation.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    local_q3_s2p = resolve_local_checkpoint_path(CYCLEGAN_SKETCH_TO_PHOTO_CKPT)
+    local_q3_p2s = resolve_local_checkpoint_path(CYCLEGAN_PHOTO_TO_SKETCH_CKPT)
     local_q3_ab = resolve_local_checkpoint_path(CYCLEGAN_GAB_CKPT)
     local_q3_ba = resolve_local_checkpoint_path(CYCLEGAN_GBA_CKPT)
     local_q3_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
 
     q3_available = (
+        (local_q3_s2p is not None and local_q3_p2s is not None)
+        or
         (local_q3_ab is not None and local_q3_ba is not None)
         or (local_q3_full is not None)
     )
 
     if q3_available:
-        st.success("Using CycleGAN checkpoints from model/ directory.")
+        if local_q3_s2p is not None and local_q3_p2s is not None:
+            st.success(
+                "Using Task 3 model pair: generator_sketch_to_photo.pth and generator_photo_to_sketch.pth"
+            )
+        else:
+            st.success("Using CycleGAN checkpoints from model/ directory.")
 
     if not q3_available:
         st.warning(
-            "No usable Q3 checkpoints found in model/. Add G_AB + G_BA checkpoints or a full CycleGAN checkpoint to run inference."
+            "No usable Q3 checkpoints found in model/. Add generator_sketch_to_photo.pth and "
+            "generator_photo_to_sketch.pth (recommended), or legacy G_AB + G_BA, or a full checkpoint."
         )
 
     with st.container(border=True):
+        direction = st.radio(
+            "Translation Direction",
+            ["Sketch -> Photo", "Photo -> Sketch"],
+            horizontal=True,
+        )
+
         q3_input_mode = st.radio(
             "Input Source",
             ["Use Built-in Sample", "Upload Input Image"],
@@ -805,15 +870,14 @@ else:
 
         q3_image_file = None
         if q3_input_mode == "Upload Input Image":
-            q3_image_file = st.file_uploader("Upload input image", type=["png", "jpg", "jpeg", "webp"])
+            uploader_label = "Upload sketch image" if direction == "Sketch -> Photo" else "Upload photo image"
+            q3_image_file = st.file_uploader(
+                uploader_label,
+                type=["png", "jpg", "jpeg", "webp"],
+            )
 
         q3_missing_uploaded_input = q3_input_mode == "Upload Input Image" and q3_image_file is None
 
-        direction = st.radio(
-            "Direction",
-            ["Sketch -> Photo", "Photo -> Sketch"],
-            horizontal=True,
-        )
         show_cycle = st.checkbox("Show cycle consistency output", value=False)
         run_q3 = st.button(
             "Translate",
@@ -849,22 +913,34 @@ else:
                 if direction == "Sketch -> Photo":
                     translated = model_ab(in_tensor)
                     cycled = model_ba(translated) if show_cycle else None
+                    translated_caption = "Generated Photo"
+                    input_caption = "Input Sketch"
                 else:
                     translated = model_ba(in_tensor)
                     cycled = model_ab(translated) if show_cycle else None
+                    translated_caption = "Generated Sketch"
+                    input_caption = "Input Photo"
 
             out_img = tensor_to_pil_from_tanh(translated)
 
             if show_cycle and cycled is not None:
                 cyc_img = tensor_to_pil_from_tanh(cycled)
                 c1, c2, c3 = st.columns(3)
-                c1.image(q3_input_img.resize((Q3_IMAGE_SIZE, Q3_IMAGE_SIZE)), caption="Input", use_container_width=True)
-                c2.image(out_img, caption="Translated", use_container_width=True)
+                c1.image(
+                    q3_input_img.resize((Q3_IMAGE_SIZE, Q3_IMAGE_SIZE)),
+                    caption=input_caption,
+                    use_container_width=True,
+                )
+                c2.image(out_img, caption=translated_caption, use_container_width=True)
                 c3.image(cyc_img, caption="Cycle Reconstructed", use_container_width=True)
             else:
                 c1, c2 = st.columns(2)
-                c1.image(q3_input_img.resize((Q3_IMAGE_SIZE, Q3_IMAGE_SIZE)), caption="Input", use_container_width=True)
-                c2.image(out_img, caption="Translated", use_container_width=True)
+                c1.image(
+                    q3_input_img.resize((Q3_IMAGE_SIZE, Q3_IMAGE_SIZE)),
+                    caption=input_caption,
+                    use_container_width=True,
+                )
+                c2.image(out_img, caption=translated_caption, use_container_width=True)
 
         except Exception as exc:
             st.error(f"Q3 inference failed: {exc}")

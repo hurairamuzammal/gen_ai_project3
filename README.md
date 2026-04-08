@@ -29,10 +29,13 @@ Optional for Q2 sample mode:
 
 - `q2_sample_input.png` (used when selecting "Use Built-in Sample" in the Q2 UI)
 
-Missing for Q3 by default:
+Available for Q3 in `model/`:
+
+- `generator_sketch_to_photo.pth`
+- `generator_photo_to_sketch.pth`
+
+Also supported as fallback naming:
 
 - `G_AB_final.pth`
 - `G_BA_final.pth`
 - or `cyclegan_final.pth`
-
-Because Q3 checkpoints are not present, the Streamlit app allows checkpoint upload in the Q3 page before inference.
