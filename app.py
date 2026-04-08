@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+import re
 from typing import Optional, Tuple, cast
 import zipfile
 
@@ -191,6 +192,22 @@ def split_cyclegan_full_state_dict(payload: object) -> Tuple[dict, dict]:
         return split_cyclegan_full_state_dict(payload["state_dict"])
 
     raise ValueError("Unable to find both G_AB and G_BA in CycleGAN full checkpoint.")
+
+
+def infer_q3_n_res_from_state_dict(state_dict: dict, default_n_res: int = Q3_N_RES) -> int:
+    """Infer CycleGAN residual block count from keys like model.<idx>.block.1.weight."""
+    normalized = strip_module_prefix(state_dict)
+    res_block_indices: set[int] = set()
+    pattern = re.compile(r"^model\.(\d+)\.block\.1\.weight$")
+
+    for key in normalized.keys():
+        match = pattern.match(key)
+        if match:
+            res_block_indices.add(int(match.group(1)))
+
+    if res_block_indices:
+        return len(res_block_indices)
+    return default_n_res
 
 
 # --------------------------
@@ -571,8 +588,13 @@ def load_q3_models(device_str: str) -> Tuple[nn.Module, nn.Module]:
             "generator_photo_to_sketch.pth, or legacy G_AB + G_BA, or a full CycleGAN checkpoint."
         )
 
-    model_ab = Q3Generator().to(device)
-    model_ba = Q3Generator().to(device)
+    # Some CycleGAN checkpoints are trained with 9 residual blocks instead of 6.
+    # Infer from checkpoint keys to avoid hard-coded architecture mismatch.
+    n_res_ab = infer_q3_n_res_from_state_dict(sd_ab)
+    n_res_ba = infer_q3_n_res_from_state_dict(sd_ba)
+
+    model_ab = Q3Generator(n_res=n_res_ab).to(device)
+    model_ba = Q3Generator(n_res=n_res_ba).to(device)
 
     load_model_weights(model_ab, sd_ab)
     load_model_weights(model_ba, sd_ba)
