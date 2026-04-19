@@ -12,18 +12,18 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 from PIL import Image
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 
 ROOT_DIR = Path(__file__).resolve().parent
 MODEL_DIR = ROOT_DIR / "model"
+SAMPLE_DIR = ROOT_DIR / "sample"
 
 DCGAN_CKPT = MODEL_DIR / "dcgan_generator_final.pt"
 WGANGP_CKPT = MODEL_DIR / "wgangp_checkpoint.pt"
 WGANGP_GEN_FALLBACK = MODEL_DIR / "wgangp_generator_final.pt"
 PIX2PIX_CKPT = MODEL_DIR / "pix2pix_export_q2.pt"
 Q2_SAMPLE_IMAGE = MODEL_DIR / "q2_sample_input.png"
-Q3_SAMPLE_IMAGE = MODEL_DIR / "q3_sample_input.png"
+Q3_SAMPLE_IMAGE = SAMPLE_DIR / "Untitled-2.jpg"
 
 CYCLEGAN_GAB_CKPT = MODEL_DIR / "G_AB_final.pth"
 CYCLEGAN_GBA_CKPT = MODEL_DIR / "G_BA_final.pth"
@@ -776,11 +776,6 @@ elif task == "Q2: Pix2Pix Sketch -> Color":
                 type=["png", "jpg", "jpeg", "webp"],
             )
 
-        ref_file = st.file_uploader(
-            "Upload reference color image (optional)",
-            type=["png", "jpg", "jpeg", "webp"],
-        )
-
         sample_sketch = Image.new("RGB", (Q2_IMAGE_SIZE, Q2_IMAGE_SIZE), "white")
         # Create a deterministic sketch-like fallback sample when no file sample is available.
         for y in range(0, Q2_IMAGE_SIZE, 8):
@@ -820,18 +815,6 @@ elif task == "Q2: Pix2Pix Sketch -> Color":
                 st.image(input_img, caption="Input Sketch", use_container_width=True)
             with right:
                 st.image(output_img, caption="Colorized Output", use_container_width=True)
-
-            if ref_file is not None:
-                ref_img = Image.open(ref_file).convert("RGB").resize((Q2_IMAGE_SIZE, Q2_IMAGE_SIZE))
-                out_np = np.array(output_img.resize((Q2_IMAGE_SIZE, Q2_IMAGE_SIZE)), dtype=np.uint8)
-                ref_np = np.array(ref_img, dtype=np.uint8)
-
-                psnr = peak_signal_noise_ratio(ref_np, out_np, data_range=255)
-                ssim = structural_similarity(ref_np, out_np, channel_axis=2, data_range=255)
-
-                m1, m2 = st.columns(2)
-                m1.metric("PSNR", f"{psnr:.2f}")
-                m2.metric("SSIM", f"{ssim:.4f}")
 
         except Exception as exc:
             st.error(f"Q2 inference failed: {exc}")
@@ -908,11 +891,11 @@ else:
         )
 
     q3_input_img = None
-    q3_sample_caption = "Built-in sample image"
+    q3_sample_caption = "Built-in sample image from sample/"
     if q3_input_mode == "Use Built-in Sample":
         if Q3_SAMPLE_IMAGE.exists():
             q3_input_img = Image.open(Q3_SAMPLE_IMAGE).convert("RGB")
-            q3_sample_caption = "Provided Q3 sample image"
+            q3_sample_caption = "Built-in sample image from sample/"
         else:
             q3_input_img = Image.new("RGB", (Q3_IMAGE_SIZE, Q3_IMAGE_SIZE), "white")
             for y in range(0, Q3_IMAGE_SIZE, 8):
