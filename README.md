@@ -1,41 +1,44 @@
-# gen_ai_project3
+# Self-Supervised Learning with Masked Autoencoders (MAE)
 
-This repository contains GenAI Assignment 03 notebooks and checkpoints.
+This project implements a **Masked Autoencoder (MAE)** based on the architecture proposed by He et al. (2021), applied to the **TinyImageNet** dataset. MAE is a powerful self-supervised learning technique that enables Vision Transformers (ViT) to learn highly semantic features from unlabeled image data.
 
-## Streamlit Inference App
+## 🚀 Key Features
+- **Scalable Architecture**: Implements the ViT-Base encoder and a lightweight transformer decoder.
+- **Asymmetric Design**: The encoder only processes visible patches (25% of the image), significantly reducing memory and compute overhead.
+- **Efficient Pre-training**: Designed for masked patch reconstruction using Mean Squared Error (MSE) loss.
+- **Mixed Precision Training**: Utilizes PyTorch `autocast` and `GradScaler` for optimized performance on NVIDIA GPUs.
 
-A unified Streamlit interface is included in `app.py` for all three tasks:
+## 🛠️ Architecture Overview
+The model operates on image patches ($16 \times 16$):
+1. **Masking**: 75% of the patches are randomly masked out.
+2. **Encoder**: A standard Vision Transformer (ViT) that only receives the visible (unmasked) patches.
+3. **Decoder**: A smaller Transformer that receives the latent representation from the encoder plus learned "mask tokens" to reconstruct the original image pixels.
+4. **Reconstruction**: The goal is to predict the pixel values of the original masked patches.
 
-1. Q1: GAN Pokemon generation (DCGAN / WGAN-GP)
-2. Q2: Pix2Pix anime sketch to color translation
-3. Q3: CycleGAN sketch-photo translation
+## 📁 Dataset
+The project uses the **TinyImageNet** dataset:
+- **Classes**: 200
+- **Training Images**: 100,000
+- **Validation Images**: 10,000
+- **Resolution**: Resized to $224 \times 224$ for standard ViT compatibility.
 
-### Run Locally
+## 📈 Training Details
+- **Optimizer**: AdamW ($lr=1.5e-4$, $weight\_decay=0.05$)
+- **Scheduler**: Cosine Annealing over 30 epochs.
+- **Loss Function**: Patch-normalized MSE loss.
+- **Device Support**: Multi-GPU (DataParallel) and CUDA.
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+## 🖥️ Getting Started
+1. **Prerequisites**:
+   ```bash
+   pip install torch torchvision numpy pandas matplotlib pillow
+   ```
+2. **Execution**:
+   Open `genai(1).ipynb` in Jupyter or Kaggle and run the cells sequentially.
 
-## Checkpoint Status
+## 📊 Results
+The model's progress is tracked via reconstruction loss across epochs. You can find the loss curves generated as `loss_curve.png` in the output directory.
 
-Available in `model/`:
-
-- `dcgan_generator_final.pt` (Q1 DCGAN)
-- `wgangp_checkpoint.pt` (Q1 WGAN-GP, generator extracted from key `G`)
-- `pix2pix_export_q2.pt` (Q2 Pix2Pix generator, both naming variants are supported)
-
-Optional for Q2 sample mode:
-
-- `q2_sample_input.png` (used when selecting "Use Built-in Sample" in the Q2 UI)
-
-Available for Q3 in `model/`:
-
-- `generator_sketch_to_photo.pth`
-- `generator_photo_to_sketch.pth`
-
-Also supported as fallback naming:
-
-- `G_AB_final.pth`
-- `G_BA_final.pth`
-- or `cyclegan_final.pth`
+## 📚 References
+- [Masked Autoencoders Are Scalable Vision Learners](https://arxiv.org/abs/2111.06377) (He et al., 2021).
+- [An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale](https://arxiv.org/abs/2010.11929) (Dosovitskiy et al., 2020).

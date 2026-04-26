@@ -19,7 +19,7 @@ MODEL_DIR = ROOT_DIR / "model"
 SAMPLE_DIR = ROOT_DIR / "sample"
 
 DCGAN_CKPT = MODEL_DIR / "dcgan_generator_final.pt"
-WGANGP_CKPT = MODEL_DIR / "wgangp_checkpoint.pt"
+WGANGP_CKPT = MODEL_DIR / "wgangp_generator.pt"
 WGANGP_GEN_FALLBACK = MODEL_DIR / "wgangp_generator_final.pt"
 PIX2PIX_CKPT = MODEL_DIR / "pix2pix_export_q2.pt"
 Q2_SAMPLE_IMAGE = MODEL_DIR / "q2_sample_input.png"
@@ -127,16 +127,13 @@ def load_torch_payload_from_bytes(blob: bytes, device: torch.device):
 
 
 def resolve_local_checkpoint_path(base_path: Path) -> Optional[Path]:
-    """Resolve local checkpoint path across file, .zip file, or extracted directory."""
-    if base_path.is_file():
+    """Resolve local checkpoint path across file, extracted directory, or .zip fallback."""
+    if base_path.exists():
         return base_path
 
     zip_variant = Path(f"{base_path}.zip")
     if zip_variant.is_file():
         return zip_variant
-
-    if base_path.is_dir():
-        return base_path
 
     return None
 
@@ -256,25 +253,29 @@ def load_q1_wgangp_model(device_str: str) -> nn.Module:
     device = torch.device(device_str)
     model = Q1Generator().to(device)
 
-    if WGANGP_CKPT.exists():
-        payload = torch.load(WGANGP_CKPT, map_location=device)
-        if isinstance(payload, dict) and "G" in payload:
-            state_dict = extract_state_dict(payload["G"])
-        else:
-            state_dict = extract_state_dict(payload)
-        load_model_weights(model, state_dict)
-        model.eval()
-        return model
+    load_errors = []
+    for checkpoint_path in (WGANGP_CKPT, WGANGP_GEN_FALLBACK):
+        if not checkpoint_path.exists():
+            load_errors.append(f"{checkpoint_path.name} is missing")
+            continue
 
-    if WGANGP_GEN_FALLBACK.exists():
-        payload = torch.load(WGANGP_GEN_FALLBACK, map_location=device)
-        state_dict = extract_state_dict(payload)
-        load_model_weights(model, state_dict)
-        model.eval()
-        return model
+        try:
+            payload = torch.load(checkpoint_path, map_location=device)
+            if isinstance(payload, dict) and "G" in payload:
+                state_dict = extract_state_dict(payload["G"])
+            else:
+                state_dict = extract_state_dict(payload)
 
+            load_model_weights(model, state_dict)
+            model.eval()
+            return model
+        except Exception as exc:
+            load_errors.append(f"{checkpoint_path.name}: {exc}")
+
+    details = "\n".join(load_errors) if load_errors else "No checkpoint files were found."
     raise FileNotFoundError(
-        f"Missing checkpoints: {WGANGP_CKPT.name} and {WGANGP_GEN_FALLBACK.name}"
+        "Missing or incompatible WGAN-GP checkpoints. Tried wgangp_generator.pt and "
+        f"wgangp_generator_final.pt.\nDetails:\n{details}"
     )
 
 
@@ -558,14 +559,19 @@ def load_q3_models(device_str: str) -> Tuple[nn.Module, nn.Module]:
     sd_ab = None
     sd_ba = None
 
+    local_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
     local_s2p = resolve_local_checkpoint_path(CYCLEGAN_SKETCH_TO_PHOTO_CKPT)
     local_p2s = resolve_local_checkpoint_path(CYCLEGAN_PHOTO_TO_SKETCH_CKPT)
     local_gab = resolve_local_checkpoint_path(CYCLEGAN_GAB_CKPT)
     local_gba = resolve_local_checkpoint_path(CYCLEGAN_GBA_CKPT)
-    local_full = resolve_local_checkpoint_path(CYCLEGAN_FULL_CKPT)
+
+    # Prefer the unified checkpoint exported by the notebook, then fall back to the split files.
+    if local_full is not None:
+        payload = load_torch_payload_from_path(local_full, device)
+        sd_ab, sd_ba = split_cyclegan_full_state_dict(payload)
 
     # Preferred naming for this project's Task 3 models.
-    if local_s2p is not None and local_p2s is not None:
+    elif local_s2p is not None and local_p2s is not None:
         payload_s2p = load_torch_payload_from_path(local_s2p, device)
         payload_p2s = load_torch_payload_from_path(local_p2s, device)
         sd_ab = extract_state_dict(payload_s2p)
@@ -847,7 +853,9 @@ else:
     )
 
     if q3_available:
-        if local_q3_s2p is not None and local_q3_p2s is not None:
+        if local_q3_full is not None:
+            st.success("Using unified CycleGAN checkpoint: cyclegan_final.pth")
+        elif local_q3_s2p is not None and local_q3_p2s is not None:
             st.success(
                 "Using Task 3 model pair: generator_sketch_to_photo.pth and generator_photo_to_sketch.pth"
             )
